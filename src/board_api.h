@@ -161,6 +161,9 @@ void board_reset(void);
 // Write PWM duty value to LED
 void board_led_write(uint32_t value);
 
+// Read button state (1 = pressed, 0 = not pressed)
+uint32_t board_button_read(void);
+
 // Write color to rgb strip
 void board_rgb_write(uint8_t const rgb[]);
 

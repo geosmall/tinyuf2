@@ -110,6 +110,14 @@ static bool check_dfu_mode(void) {
     return true;
   }
 
+#ifdef BUTTON_PIN
+  // Check if button is held during boot
+  if (board_button_read()) {
+    TUF2_LOG1("Button held\r\n");
+    return true;
+  }
+#endif
+
 #if TINYUF2_DBL_TAP_DFU
    TUF2_LOG1_HEX(TINYUF2_DBL_TAP_REG);
 

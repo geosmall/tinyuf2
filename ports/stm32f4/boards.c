@@ -276,6 +276,20 @@ void board_led_write(uint32_t state)
   HAL_GPIO_WritePin(LED_PORT, LED_PIN, state ? LED_STATE_ON : (1-LED_STATE_ON));
 }
 
+//--------------------------------------------------------------------+
+// Button
+//--------------------------------------------------------------------+
+
+uint32_t board_button_read(void)
+{
+#ifdef BUTTON_PIN
+  // Button is active low (directly to GND when pressed)
+  return HAL_GPIO_ReadPin(BUTTON_PORT, BUTTON_PIN) == GPIO_PIN_RESET;
+#else
+  return 0;
+#endif
+}
+
 #if NEOPIXEL_NUMBER
 #define MAGIC_800_INT   900000  // ~1.11 us -> 1.2  field
 #define MAGIC_800_T0H  2800000  // ~0.36 us -> 0.44 field
