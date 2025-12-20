@@ -386,6 +386,30 @@ void OTG_FS_IRQHandler(void)
 {
   tud_int_handler(0);
 }
+
+//--------------------------------------------------------------------+
+// CDC
+//--------------------------------------------------------------------+
+
+// Invoked when CDC line state changed (e.g., connected/disconnected)
+// Used for 1200 baud touch detection for Arduino IDE upload
+void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
+  (void) instance;
+  (void) rts;
+
+  // DTR = false means disconnected
+  if (!dtr) {
+    cdc_line_coding_t coding;
+    tud_cdc_get_line_coding(&coding);
+
+    if (coding.bit_rate == 1200) {
+      // 1200 baud touch detected - we're already in bootloader,
+      // so just stay here (no action needed)
+      TUF2_LOG1("1200 baud touch detected\r\n");
+    }
+  }
+}
+
 #endif
 
 // Required by __libc_init_array in startup code if we are compiling using
