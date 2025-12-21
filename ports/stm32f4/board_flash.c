@@ -205,7 +205,25 @@ bool board_flash_write(uint32_t addr, void const* data, uint32_t len)
 
 void board_flash_erase_app(void)
 {
-  // TODO implement later
+  // Erase all app sectors for a clean slate
+  HAL_FLASH_Unlock();
+
+  // Erase from sector 4 to end of this board's flash
+  // Sector 4: 64KB, Sectors 5+: 128KB each
+  for (uint32_t sector = 4; sector < BOARD_FLASH_SECTORS; sector++) {
+    TUF2_LOG1("Erase sector %lu\r\n", sector);
+    FLASH_Erase_Sector(sector, FLASH_VOLTAGE_RANGE_3);
+    FLASH_WaitForLastOperation(HAL_MAX_DELAY);
+
+#if CFG_TUD_CDC
+    // Progress indicator over CDC
+    tud_cdc_write_char('.');
+    tud_cdc_write_flush();
+    tud_task();
+#endif
+  }
+
+  HAL_FLASH_Lock();
 }
 
 bool board_flash_protect_bootloader(bool protect)

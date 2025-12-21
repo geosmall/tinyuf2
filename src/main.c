@@ -32,6 +32,11 @@
 #include "uf2.h"
 #include "tusb.h"
 
+// CDC CLI task (defined in port's boards.c)
+#if CFG_TUD_CDC
+extern void cdc_task(void);
+#endif
+
 //--------------------------------------------------------------------+
 // MACRO CONSTANT TYPEDEF PROTOTYPES
 //--------------------------------------------------------------------+
@@ -94,6 +99,9 @@ int main(void) {
 #if CFG_TUSB_OS == OPT_OS_NONE || CFG_TUSB_OS == OPT_OS_PICO
   while(1) {
     tud_task();
+#if CFG_TUD_CDC
+    cdc_task();
+#endif
   }
 #endif
 }

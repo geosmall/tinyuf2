@@ -87,7 +87,7 @@
 
 // CDC FIFO size of TX and RX
 #define CFG_TUD_CDC_RX_BUFSIZE   64
-#define CFG_TUD_CDC_TX_BUFSIZE   64
+#define CFG_TUD_CDC_TX_BUFSIZE   128
 #define CFG_TUD_CDC_EP_BUFSIZE   64
 
 // HID buffer size Should be sufficient to hold ID (if any) + Data
