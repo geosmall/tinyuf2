@@ -1,0 +1,134 @@
+/*
+ * The MIT License (MIT)
+ *
+ * Copyright (c) 2018 Ha Thach for Adafruit Industries
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in
+ * all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ * THE SOFTWARE.
+ */
+
+#ifndef BOARD_H_
+#define BOARD_H_
+
+// Development mode: bootloader write protection disabled for easier debugging
+// Comment out for production builds
+#define TINYUF2_PROTECT_BOOTLOADER 0
+
+//--------------------------------------------------------------------+
+// LED
+//--------------------------------------------------------------------+
+
+#define LED_PORT              GPIOB
+#define LED_PIN               GPIO_PIN_6
+#define LED_STATE_ON          1
+
+//--------------------------------------------------------------------+
+// Button (directly to GND when directly wired, active low)
+// Motor 1 pad (PA0) - bridge to GND for bootloader entry
+//--------------------------------------------------------------------+
+
+#define BUTTON_PORT           GPIOA
+#define BUTTON_PIN            GPIO_PIN_0
+
+//--------------------------------------------------------------------+
+// Neopixel
+//--------------------------------------------------------------------+
+
+// Number of neopixels
+#define NEOPIXEL_NUMBER       0
+
+//--------------------------------------------------------------------+
+// Flash
+//--------------------------------------------------------------------+
+
+// Flash size of the board (512KB for F722RE)
+#define BOARD_FLASH_SIZE      (512 * 1024)
+#define BOARD_FLASH_SECTORS   8
+
+//--------------------------------------------------------------------+
+// USB UF2
+//--------------------------------------------------------------------+
+
+#define USB_VID           0x239A
+#define USB_PID           0x006A
+#define USB_MANUFACTURER  "BKMN"
+#define USB_PRODUCT       "Nero F7"
+
+#define UF2_PRODUCT_NAME  USB_MANUFACTURER " " USB_PRODUCT
+#define UF2_BOARD_ID      "STM32F722-NERO-F7"
+#define UF2_VOLUME_LABEL  "NEROF7BOOT"
+#define UF2_INDEX_URL     "https://github.com/geosmall/tinyuf2"
+
+// Nero F7 has USB VBUS detection but TinyUF2 expects PA9
+// Disable VBUS sensing for compatibility
+#define USB_NO_VBUS_PIN   1
+
+//--------------------------------------------------------------------+
+// UART (USART2 on PA2/PA3)
+//--------------------------------------------------------------------+
+
+#define UART_DEV              USART2
+#define UART_CLOCK_ENABLE     __HAL_RCC_USART2_CLK_ENABLE
+#define UART_CLOCK_DISABLE    __HAL_RCC_USART2_CLK_DISABLE
+#define UART_GPIO_PORT        GPIOA
+#define UART_GPIO_AF          GPIO_AF7_USART2
+#define UART_TX_PIN           GPIO_PIN_2
+#define UART_RX_PIN           GPIO_PIN_3
+
+//--------------------------------------------------------------------+
+// RCC Clock
+//--------------------------------------------------------------------+
+// STM32F722RE: 216 MHz from 8 MHz HSE
+static inline void clock_init(void)
+{
+  RCC_ClkInitTypeDef RCC_ClkInitStruct;
+  RCC_OscInitTypeDef RCC_OscInitStruct;
+
+  /* Enable Power Control clock */
+  __HAL_RCC_PWR_CLK_ENABLE();
+
+  /* The voltage scaling allows optimizing the power consumption when the device is
+     clocked below the maximum system frequency, to update the voltage scaling value
+     regarding system frequency refer to product datasheet.  */
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE1);
+
+  /* Enable HSE Oscillator and activate PLL with HSE as source */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSE;
+  RCC_OscInitStruct.HSEState = RCC_HSE_ON;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
+  RCC_OscInitStruct.PLL.PLLM = HSE_VALUE/1000000;  // 8 -> 1 MHz reference
+  RCC_OscInitStruct.PLL.PLLN = 432;                 // 432 MHz VCO
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;       // 216 MHz SYSCLK
+  RCC_OscInitStruct.PLL.PLLQ = 9;                   // 48 MHz USB (432/9)
+  HAL_RCC_OscConfig(&RCC_OscInitStruct);
+
+  /* Activate the OverDrive to reach the 216 MHz Frequency */
+  HAL_PWREx_EnableOverDrive();
+
+  /* Select PLL as system clock source and configure the HCLK, PCLK1 and PCLK2
+     clocks dividers */
+  RCC_ClkInitStruct.ClockType = (RCC_CLOCKTYPE_SYSCLK | RCC_CLOCKTYPE_HCLK | RCC_CLOCKTYPE_PCLK1 | RCC_CLOCKTYPE_PCLK2);
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV4;   // 54 MHz
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;   // 108 MHz
+  HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_7);
+}
+
+#endif
