@@ -25,6 +25,10 @@
 #ifndef BOARD_H_
 #define BOARD_H_
 
+// Production mode: bootloader write protection enabled (default)
+// Uncomment below for development/debugging (allows J-Link without mass erase)
+// #define TINYUF2_PROTECT_BOOTLOADER 0
+
 //--------------------------------------------------------------------+
 // LED
 //--------------------------------------------------------------------+
@@ -75,16 +79,16 @@
 #define USB_NO_VBUS_PIN   1
 
 //--------------------------------------------------------------------+
-// UART
+// UART (USART2 on PA2/PA3 avoids conflict with USB OTG ID on PA10)
 //--------------------------------------------------------------------+
 
-#define UART_DEV              USART1
-#define UART_CLOCK_ENABLE     __HAL_RCC_USART1_CLK_ENABLE
-#define UART_CLOCK_DISABLE    __HAL_RCC_USART1_CLK_DISABLE
+#define UART_DEV              USART2
+#define UART_CLOCK_ENABLE     __HAL_RCC_USART2_CLK_ENABLE
+#define UART_CLOCK_DISABLE    __HAL_RCC_USART2_CLK_DISABLE
 #define UART_GPIO_PORT        GPIOA
-#define UART_GPIO_AF          GPIO_AF7_USART1
-#define UART_TX_PIN           GPIO_PIN_9
-#define UART_RX_PIN           GPIO_PIN_10
+#define UART_GPIO_AF          GPIO_AF7_USART2
+#define UART_TX_PIN           GPIO_PIN_2
+#define UART_RX_PIN           GPIO_PIN_3
 
 //--------------------------------------------------------------------+
 // RCC Clock
