@@ -23,6 +23,7 @@
  */
 
 #include "board_api.h"
+#include "stm32f4xx_hal.h"
 
 #ifndef BUILD_NO_TINYUSB
 #include "tusb.h"
@@ -100,6 +101,19 @@ static bool is_blank(uint32_t addr, uint32_t size)
   return true;
 }
 
+// LED error indication: rapid blink pattern to signal flash failure
+// Visible feedback for users without UART connection
+static void flash_error_blink(void)
+{
+  for (int i = 0; i < 10; i++)
+  {
+    board_led_write(0xff);
+    HAL_Delay(50);
+    board_led_write(0x00);
+    HAL_Delay(50);
+  }
+}
+
 static bool flash_erase(uint32_t addr)
 {
   // starting address from 0x08000000
@@ -141,7 +155,7 @@ static bool flash_erase(uint32_t addr)
   return true;
 }
 
-static void flash_write(uint32_t dst, const uint8_t *src, int len)
+static bool flash_write(uint32_t dst, const uint8_t *src, int len)
 {
   flash_erase(dst);
 
@@ -153,13 +167,15 @@ static void flash_write(uint32_t dst, const uint8_t *src, int len)
     if ( HAL_FLASH_Program(FLASH_TYPEPROGRAM_WORD, dst + i, (uint64_t) data) != HAL_OK )
     {
       TUF2_LOG1("Failed to write flash at address %08lX\r\n", dst + i);
-      break;
+      flash_error_blink();
+      return false;
     }
 
     if ( FLASH_WaitForLastOperation(HAL_MAX_DELAY) != HAL_OK )
     {
       TUF2_LOG1("Waiting on last operation failed\r\n");
-      return;
+      flash_error_blink();
+      return false;
     }
   }
 
@@ -167,7 +183,11 @@ static void flash_write(uint32_t dst, const uint8_t *src, int len)
   if ( memcmp((void*) dst, src, len) != 0 )
   {
     TUF2_LOG1("Failed to write\r\n");
+    flash_error_blink();
+    return false;
   }
+
+  return true;
 }
 
 //--------------------------------------------------------------------+
@@ -192,15 +212,13 @@ void board_flash_flush(void)
 {
 }
 
-// TODO not working quite yet
 bool board_flash_write(uint32_t addr, void const* data, uint32_t len)
 {
-  // TODO skip matching contents
   HAL_FLASH_Unlock();
-  flash_write(addr, data, len);
+  bool result = flash_write(addr, data, len);
   HAL_FLASH_Lock();
 
-  return true;
+  return result;
 }
 
 void board_flash_erase_app(void)

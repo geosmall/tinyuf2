@@ -246,6 +246,7 @@ void board_app_jump(void)
 
   /* switch exception handlers to the application */
   SCB->VTOR = (uint32_t) BOARD_FLASH_APP_START;
+  __ISB();  // Ensure pipeline uses new vector table
 
   // Set stack pointer
   __set_MSP(sp);

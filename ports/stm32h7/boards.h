@@ -35,12 +35,30 @@
 
 #include "board.h"
 
-// depending on internal or external flash
-// #define BOARD_FLASH_ADDR_ZERO   0x08000000
+//--------------------------------------------------------------------+
+// Memory Configuration
+//--------------------------------------------------------------------+
 
-// Flash Start Address of Application
-// #define BOARD_FLASH_APP_START   0x08010000
-// #define BOARD_FLASH_APP_START   0x90000000
+#ifdef BOARD_PFLASH_EN
+//--------------------------------------------------------------------+
+// H743 Internal Flash Configuration (2MB)
+//--------------------------------------------------------------------+
+
+#define PFLASH_BASE_ADDR  0x08000000U
+
+// Required for ghostfat address calculations
+#define BOARD_FLASH_ADDR_ZERO  PFLASH_BASE_ADDR
+
+// App valid check - stack pointer must be in DTCM or AXI SRAM
+// DTCM: 0x20000000 - 0x2001FFFF (128KB)
+// AXI SRAM: 0x24000000 - 0x2407FFFF (512KB)
+#define IS_VALID_SP(sp) (((sp) >= 0x20000000 && (sp) <= 0x2001FFFF) || \
+                         ((sp) >= 0x24000000 && (sp) <= 0x2407FFFF))
+
+#else
+//--------------------------------------------------------------------+
+// H750 QSPI Flash Configuration (External)
+//--------------------------------------------------------------------+
 
 // Boot address list
 // The memory last flashed by tinyuf2 will be used
@@ -75,6 +93,8 @@
 #define IS_AXISRAM_ADDR(x)  (((x) >= (AXISRAM_BASE_ADDR + AXISRAM_OFFS)) && ((x) < (AXISRAM_BASE_ADDR + AXISRAM_SIZE)))
 
 #define SET_BOOT_ADDR(x) board_save_app_start_address(x)
+
+#endif // BOARD_PFLASH_EN
 
 // Double Reset tap to enter DFU
 #define TINYUF2_DBL_TAP_DFU  1

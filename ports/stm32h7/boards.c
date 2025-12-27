@@ -169,6 +169,14 @@ bool board_app_valid(void)
 
   // 2nd word should be application reset
 
+#ifdef BOARD_PFLASH_EN
+  // H743 internal flash: Reset_Handler must be in flash (after bootloader)
+  if (app_vector[1] >= BOARD_FLASH_APP_START &&
+      app_vector[1] < (PFLASH_BASE_ADDR + BOARD_FLASH_SIZE))
+  {
+    return true;
+  }
+#else
   // If the Reset_Handler is in the later 64KB of PFLASH then it's valid
   if (IS_PFLASH_ADDR(app_addr) && (IS_PFLASH_ADDR(app_vector[1]))) return true;
 
@@ -178,6 +186,7 @@ bool board_app_valid(void)
   // If Reset_Handler in RAM points to RAM
   if (IS_AXISRAM_ADDR(app_addr) && IS_AXISRAM_ADDR(app_vector[1])) return true;
   // TODO: support downloads validation in other RAM regions as well
+#endif
 
   return false;
 }
@@ -248,6 +257,7 @@ uint8_t allow_rcc_deinit = 1;
   __DMB(); //ARM says to use a DMB instruction before relocating VTOR */
   SCB->VTOR = (uint32_t) app_addr;
   __DSB(); //ARM says to use a DSB instruction just after relocating VTOR */
+  __ISB(); // Ensure instruction pipeline fetches from new VTOR
 
   // Jump to application reset vector
   asm("bx %0" :: "r"(app_vector[1]));

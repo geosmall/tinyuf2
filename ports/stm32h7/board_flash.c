@@ -1,5 +1,7 @@
 #include "board_api.h"
 #include "stm32h7xx_hal.h"
+
+#ifndef BOARD_PFLASH_EN
 #include "qspi_status.h"
 
 #ifdef W25Qx_SPI
@@ -23,9 +25,213 @@ QSPI_HandleTypeDef _qspi_flash;
 SPI_HandleTypeDef _spi_flash;
 #endif // BOARD_SPI_FLASH_EN
 
+#endif // !BOARD_PFLASH_EN
+
+//--------------------------------------------------------------------+
+// H743 Internal Flash Support (2MB dual-bank, 128KB sectors)
+//--------------------------------------------------------------------+
+#ifdef BOARD_PFLASH_EN
+
+#define FLASH_BASE_ADDR         0x08000000UL
+
+// LED error indication: rapid blink pattern to signal flash failure
+// Visible feedback for users without UART connection
+static void flash_error_blink(void)
+{
+  for (int i = 0; i < 10; i++)
+  {
+    board_led_write(0xff);
+    HAL_Delay(50);
+    board_led_write(0x00);
+    HAL_Delay(50);
+  }
+}
+#define H743_SECTOR_SIZE        (128 * 1024)  // 128KB per sector
+#define H743_BANK1_SECTORS      8
+#define H743_BANK2_SECTORS      8
+#define H743_TOTAL_SECTORS      (H743_BANK1_SECTORS + H743_BANK2_SECTORS)
+
+// Bootloader occupies first sector (128KB), protect it
+#define BOOTLOADER_SECTOR_COUNT 1
+
+static uint8_t erased_sectors[H743_TOTAL_SECTORS] = { 0 };
+
+static bool is_blank(uint32_t addr, uint32_t size)
+{
+  for (uint32_t i = 0; i < size; i += sizeof(uint32_t))
+  {
+    if (*(uint32_t*)(addr + i) != 0xFFFFFFFF)
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+static uint32_t get_sector_number(uint32_t addr)
+{
+  // H743: All sectors are 128KB
+  // Bank 1: sectors 0-7 (0x08000000 - 0x080FFFFF)
+  // Bank 2: sectors 0-7 (0x08100000 - 0x081FFFFF)
+  uint32_t offset = addr - FLASH_BASE_ADDR;
+
+  if (offset < (H743_BANK1_SECTORS * H743_SECTOR_SIZE))
+  {
+    // Bank 1
+    return offset / H743_SECTOR_SIZE;
+  }
+  else
+  {
+    // Bank 2 - sectors numbered 0-7 within bank
+    return (offset - (H743_BANK1_SECTORS * H743_SECTOR_SIZE)) / H743_SECTOR_SIZE;
+  }
+}
+
+static uint32_t get_bank_number(uint32_t addr)
+{
+  uint32_t offset = addr - FLASH_BASE_ADDR;
+  return (offset < (H743_BANK1_SECTORS * H743_SECTOR_SIZE)) ? FLASH_BANK_1 : FLASH_BANK_2;
+}
+
+static uint32_t get_sector_addr(uint32_t sector, uint32_t bank)
+{
+  if (bank == FLASH_BANK_1)
+  {
+    return FLASH_BASE_ADDR + (sector * H743_SECTOR_SIZE);
+  }
+  else
+  {
+    return FLASH_BASE_ADDR + (H743_BANK1_SECTORS * H743_SECTOR_SIZE) + (sector * H743_SECTOR_SIZE);
+  }
+}
+
+static bool flash_erase(uint32_t addr)
+{
+  uint32_t sector = get_sector_number(addr);
+  uint32_t bank = get_bank_number(addr);
+  uint32_t sector_addr = get_sector_addr(sector, bank);
+
+  // Global sector index for tracking
+  uint32_t global_sector = (bank == FLASH_BANK_1) ? sector : (H743_BANK1_SECTORS + sector);
+
+  // Already erased?
+  if (erased_sectors[global_sector])
+  {
+    return true;
+  }
+
+  // Mark as erased
+  erased_sectors[global_sector] = 1;
+
+  // Check if already blank
+  if (is_blank(sector_addr, H743_SECTOR_SIZE))
+  {
+    return true;
+  }
+
+  TUF2_LOG1("Erase: sector %lu bank %lu at %08lX ... ", sector, (bank == FLASH_BANK_1) ? 1UL : 2UL, sector_addr);
+
+  FLASH_EraseInitTypeDef erase_init = {0};
+  erase_init.TypeErase = FLASH_TYPEERASE_SECTORS;
+  erase_init.Banks = bank;
+  erase_init.Sector = sector;
+  erase_init.NbSectors = 1;
+  erase_init.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+
+  uint32_t sector_error = 0;
+  HAL_StatusTypeDef status = HAL_FLASHEx_Erase(&erase_init, &sector_error);
+
+  if (status != HAL_OK)
+  {
+    TUF2_LOG1("FAILED (err=%lu)\r\n", sector_error);
+    flash_error_blink();
+    return false;
+  }
+
+  // Invalidate D-Cache for erased sector so subsequent reads see 0xFF
+  SCB_InvalidateDCache_by_Addr((void*)sector_addr, H743_SECTOR_SIZE);
+  __DSB();
+
+  TUF2_LOG1("OK\r\n");
+  return true;
+}
+
+static bool flash_write_internal(uint32_t dst, const uint8_t *src, int len)
+{
+  // H7 requires 32-byte aligned flash word programming
+  if ((dst & 0x1F) != 0)
+  {
+    TUF2_LOG1("Flash address %08lX not 32-byte aligned\r\n", dst);
+    flash_error_blink();
+    return false;
+  }
+
+  if (!flash_erase(dst))
+  {
+    flash_error_blink();
+    return false;
+  }
+
+  TUF2_LOG1("Write flash at address %08lX\r\n", dst);
+
+  // H7 requires 256-bit (32-byte) flash word programming
+  for (int i = 0; i < len; i += 32)
+  {
+    uint32_t flash_word[8];
+
+    // Copy data, pad with 0xFF if needed
+    for (int j = 0; j < 8; j++)
+    {
+      int offset = i + (j * 4);
+      if (offset + 4 <= len)
+      {
+        flash_word[j] = *((uint32_t*)((void*)(src + offset)));
+      }
+      else if (offset < len)
+      {
+        // Partial word at end
+        flash_word[j] = 0xFFFFFFFF;
+        for (int k = 0; k < (len - offset); k++)
+        {
+          ((uint8_t*)&flash_word[j])[k] = src[offset + k];
+        }
+      }
+      else
+      {
+        flash_word[j] = 0xFFFFFFFF;
+      }
+    }
+
+    if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, dst + i, (uint32_t)flash_word) != HAL_OK)
+    {
+      TUF2_LOG1("Failed to write flash at address %08lX\r\n", dst + i);
+      flash_error_blink();
+      return false;
+    }
+  }
+
+  // H7 cache coherency: Invalidate D-Cache for the written region before verify
+  // This ensures we read actual flash contents, not stale cached data
+  SCB_InvalidateDCache_by_Addr((void*)dst, len);
+  __DSB();  // Data synchronization barrier
+
+  // Verify contents
+  if (memcmp((void*)dst, src, len) != 0)
+  {
+    TUF2_LOG1("Flash verify failed\r\n");
+    flash_error_blink();
+    return false;
+  }
+
+  return true;
+}
+
+#endif // BOARD_PFLASH_EN
+
 //--------------------------------------------------------------------+
 // Board Memory Callouts
 //--------------------------------------------------------------------+
+#ifndef BOARD_PFLASH_EN
 #ifdef W25Qx_SPI
 uint32_t W25Qx_SPI_Transmit(uint8_t * buffer, uint16_t len, uint32_t timeout)
 {
@@ -119,6 +325,142 @@ static void qspi_EraseChip(void) {
   CSP_QSPI_Erase_Chip();
   #endif
 }
+#endif // !BOARD_PFLASH_EN (QSPI functions)
+
+//--------------------------------------------------------------------+
+// Board Flash API
+//--------------------------------------------------------------------+
+
+#ifdef BOARD_PFLASH_EN
+//--------------------------------------------------------------------+
+// Internal Flash Board API (H743)
+//--------------------------------------------------------------------+
+
+void board_flash_early_init(void)
+{
+  // No early init needed for internal flash
+}
+
+void board_flash_init(void)
+{
+  // No init needed for internal flash
+}
+
+void board_flash_deinit(void)
+{
+  // No deinit needed for internal flash
+}
+
+uint32_t board_flash_size(void)
+{
+  return BOARD_FLASH_SIZE;
+}
+
+void board_flash_flush(void)
+{
+  // No flush needed
+}
+
+void board_flash_read(uint32_t addr, void *data, uint32_t len)
+{
+  // H7 cache coherency: Invalidate D-Cache before reading to ensure
+  // we get actual flash contents, not stale cached data
+  SCB_InvalidateDCache_by_Addr((void*)addr, len);
+  memcpy(data, (void*)addr, len);
+}
+
+bool board_flash_write(uint32_t addr, void const *data, uint32_t len)
+{
+  HAL_FLASH_Unlock();
+  bool result = flash_write_internal(addr, data, len);
+  HAL_FLASH_Lock();
+  return result;
+}
+
+void board_flash_erase_app(void)
+{
+  HAL_FLASH_Unlock();
+
+  // Erase all sectors except bootloader (sector 0)
+  // Bank 1: sectors 1-7, Bank 2: sectors 0-7
+  for (uint32_t sector = BOOTLOADER_SECTOR_COUNT; sector < H743_BANK1_SECTORS; sector++)
+  {
+    TUF2_LOG1("Erase Bank1 sector %lu\r\n", sector);
+
+    FLASH_EraseInitTypeDef erase_init = {0};
+    erase_init.TypeErase = FLASH_TYPEERASE_SECTORS;
+    erase_init.Banks = FLASH_BANK_1;
+    erase_init.Sector = sector;
+    erase_init.NbSectors = 1;
+    erase_init.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+
+    uint32_t sector_error = 0;
+    HAL_FLASHEx_Erase(&erase_init, &sector_error);
+
+    // Invalidate D-Cache for erased sector so subsequent reads see 0xFF
+    uint32_t sector_addr = FLASH_BASE_ADDR + (sector * H743_SECTOR_SIZE);
+    SCB_InvalidateDCache_by_Addr((void*)sector_addr, H743_SECTOR_SIZE);
+  }
+
+  // Erase Bank 2 (all sectors)
+  for (uint32_t sector = 0; sector < H743_BANK2_SECTORS; sector++)
+  {
+    TUF2_LOG1("Erase Bank2 sector %lu\r\n", sector);
+
+    FLASH_EraseInitTypeDef erase_init = {0};
+    erase_init.TypeErase = FLASH_TYPEERASE_SECTORS;
+    erase_init.Banks = FLASH_BANK_2;
+    erase_init.Sector = sector;
+    erase_init.NbSectors = 1;
+    erase_init.VoltageRange = FLASH_VOLTAGE_RANGE_3;
+
+    uint32_t sector_error = 0;
+    HAL_FLASHEx_Erase(&erase_init, &sector_error);
+
+    // Invalidate D-Cache for erased sector so subsequent reads see 0xFF
+    uint32_t sector_addr = FLASH_BASE_ADDR + (H743_BANK1_SECTORS * H743_SECTOR_SIZE) + (sector * H743_SECTOR_SIZE);
+    SCB_InvalidateDCache_by_Addr((void*)sector_addr, H743_SECTOR_SIZE);
+  }
+
+  __DSB();  // Ensure all cache invalidations complete
+  HAL_FLASH_Lock();
+}
+
+bool board_flash_protect_bootloader(bool protect)
+{
+  (void)protect;
+  // TODO: Implement H743 option byte write protection
+  return true;
+}
+
+// For internal flash boards, these are simple stubs since we don't need
+// runtime boot address selection (app always at BOARD_FLASH_APP_START)
+uint32_t board_get_app_start_address(void)
+{
+  return BOARD_FLASH_APP_START;
+}
+
+void board_save_app_start_address(uint32_t addr)
+{
+  (void)addr;
+  // Not used for internal flash - app always at fixed address
+}
+
+void board_clear_temp_boot_addr(void)
+{
+  // Not used for internal flash
+}
+
+#else // !BOARD_PFLASH_EN - QSPI flash boards (H750)
+//--------------------------------------------------------------------+
+// QSPI Flash Board API (H750)
+//--------------------------------------------------------------------+
+
+extern volatile uint32_t _board_tmp_boot_addr[];
+extern volatile uint32_t _board_tmp_boot_magic[];
+
+#define TMP_BOOT_ADDR   _board_tmp_boot_addr[0]
+#define TMP_BOOT_MAGIC  _board_tmp_boot_magic[0]
 
 uint32_t board_get_app_start_address(void)
 {
@@ -303,3 +645,5 @@ void board_flash_erase_app(void)
   // TODO: Implement PFLASH erase for non-tinyuf2 sectors
   board_reset();
 }
+
+#endif // !BOARD_PFLASH_EN
