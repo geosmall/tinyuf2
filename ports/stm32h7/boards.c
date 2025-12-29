@@ -73,7 +73,13 @@ void board_init(void)
 #ifdef BUTTON_PIN
   GPIO_InitStruct.Pin = BUTTON_PIN;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  // Use PULLUP for active-low buttons (BUTTON_STATE_ACTIVE=0)
+  // Use PULLDOWN for active-high buttons (BUTTON_STATE_ACTIVE=1)
+  #if BUTTON_STATE_ACTIVE == 0
+  GPIO_InitStruct.Pull = GPIO_PULLUP;
+  #else
   GPIO_InitStruct.Pull = GPIO_PULLDOWN;
+  #endif
   HAL_GPIO_Init(BUTTON_PORT, &GPIO_InitStruct);
 #endif
 
@@ -149,22 +155,33 @@ bool board_app_valid(void)
   uint32_t app_vector[2u] = { 0u, 0u };
   board_flash_read(app_addr, app_vector, 8u);
 
-  // 1st word should be in SRAM region and aligned
-  switch ((app_vector[0] & 0xFFFF0003u))
-  {
-    case 0x00000000u: // ITCM 64K       [0x0000_0000u--0x0000_FFFFu]
-    case 0x20010000u: // DTCM 64K       [0x2000_0000u--0x2000_FFFFu]
-    case 0x20020000u: // DTCM 64K       [0x2001_0000u--0x2001_FFFFu]
-    case 0x24000000u: // AXI SRAM 512K  [0x2400_0000u--0x2407_FFFFu]
-    case 0x30010000u: // SRAM1 64K      [0x3001_0000u--0x3001_FFFFu]
-    case 0x30020000u: // SRAM2 64K      [0x3002_0000u--0x3002_FFFFu]
-    case 0x30030000u: // SRAM2 64K      [0x3003_0000u--0x3003_FFFFu]
-    case 0x30040000u: // SRAM3 32K      [0x3004_0000u--0x3004_7FFFu]
-    case 0x38000000u: // SRAM4 64K      [0x3800_0000u--0x3800_FFFFu]
-    case 0x38800000u: // Backup SRAM 4K [0x3880_0000u--0x3880_0FFFu]
-      break;
-    default:
-      return false;
+  TUF2_LOG1("AppChk: addr=%08lx SP=%08lx RST=%08lx\r\n", app_addr, app_vector[0], app_vector[1]);
+
+  // 1st word (initial SP) should be in SRAM region and aligned
+  // Use 0xFFF80003 mask for AXI SRAM to cover full 512KB range
+  uint32_t sp_masked = app_vector[0] & 0xFFFF0003u;
+  uint32_t sp_axi_masked = app_vector[0] & 0xFFF80003u;  // Covers 512KB AXI SRAM
+
+  // Check AXI SRAM (512KB: 0x24000000-0x2407FFFF, SP can be at 0x24080000)
+  if (sp_axi_masked == 0x24000000u || sp_axi_masked == 0x24080000u) {
+    TUF2_LOG1("SP OK (AXI)\r\n");
+  } else {
+    // Check other RAM regions using the original mask
+    switch (sp_masked)
+    {
+      case 0x00000000u: // ITCM 64K       [0x0000_0000u--0x0000_FFFFu]
+      case 0x20010000u: // DTCM 64K       [0x2000_0000u--0x2000_FFFFu]
+      case 0x20020000u: // DTCM 64K       [0x2001_0000u--0x2001_FFFFu]
+      case 0x30010000u: // SRAM1 64K      [0x3001_0000u--0x3001_FFFFu]
+      case 0x30020000u: // SRAM2 64K      [0x3002_0000u--0x3002_FFFFu]
+      case 0x30030000u: // SRAM2 64K      [0x3003_0000u--0x3003_FFFFu]
+      case 0x30040000u: // SRAM3 32K      [0x3004_0000u--0x3004_7FFFu]
+      case 0x38000000u: // SRAM4 64K      [0x3800_0000u--0x3800_FFFFu]
+      case 0x38800000u: // Backup SRAM 4K [0x3880_0000u--0x3880_0FFFu]
+        break;
+      default:
+        return false;
+    }
   }
 
   // 2nd word should be application reset

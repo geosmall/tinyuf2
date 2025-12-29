@@ -156,45 +156,44 @@ static bool flash_erase(uint32_t addr)
   return true;
 }
 
+// 32-byte aligned buffer for H7 flash word programming (must be static to reduce stack)
+static uint32_t flash_word[8] __attribute__((aligned(32)));
+static uint8_t local_buf[256] __attribute__((aligned(4)));
+
 static bool flash_write_internal(uint32_t dst, const uint8_t *src, int len)
 {
   // H7 requires 32-byte aligned flash word programming
   if ((dst & 0x1F) != 0)
   {
-    TUF2_LOG1("Flash address %08lX not 32-byte aligned\r\n", dst);
-    flash_error_blink();
+    TUF2_LOG1("Addr %08lX not aligned\r\n", dst);
     return false;
   }
 
   if (!flash_erase(dst))
   {
-    flash_error_blink();
     return false;
   }
 
-  TUF2_LOG1("Write flash at address %08lX\r\n", dst);
+  // Copy source data to static buffer to avoid USB buffer issues during flash
+  if ((uint32_t)len > sizeof(local_buf)) len = sizeof(local_buf);
+  memcpy(local_buf, src, len);
 
   // H7 requires 256-bit (32-byte) flash word programming
   for (int i = 0; i < len; i += 32)
   {
-    uint32_t flash_word[8];
-
-    // Copy data, pad with 0xFF if needed
+    // Copy data from local buffer, pad with 0xFF if needed
     for (int j = 0; j < 8; j++)
     {
       int offset = i + (j * 4);
       if (offset + 4 <= len)
       {
-        flash_word[j] = *((uint32_t*)((void*)(src + offset)));
+        memcpy(&flash_word[j], local_buf + offset, 4);
       }
       else if (offset < len)
       {
         // Partial word at end
         flash_word[j] = 0xFFFFFFFF;
-        for (int k = 0; k < (len - offset); k++)
-        {
-          ((uint8_t*)&flash_word[j])[k] = src[offset + k];
-        }
+        memcpy(&flash_word[j], local_buf + offset, len - offset);
       }
       else
       {
@@ -204,19 +203,27 @@ static bool flash_write_internal(uint32_t dst, const uint8_t *src, int len)
 
     if (HAL_FLASH_Program(FLASH_TYPEPROGRAM_FLASHWORD, dst + i, (uint32_t)flash_word) != HAL_OK)
     {
-      TUF2_LOG1("Failed to write flash at address %08lX\r\n", dst + i);
+      TUF2_LOG1("Flash fail at %08lX\r\n", dst + i);
+      flash_error_blink();
+      return false;
+    }
+
+    // Wait for flash operation to complete
+    uint32_t bank = get_bank_number(dst);
+    if (FLASH_WaitForLastOperation(HAL_MAX_DELAY, bank) != HAL_OK)
+    {
+      TUF2_LOG1("Flash wait fail\r\n");
       flash_error_blink();
       return false;
     }
   }
 
   // H7 cache coherency: Invalidate D-Cache for the written region before verify
-  // This ensures we read actual flash contents, not stale cached data
   SCB_InvalidateDCache_by_Addr((void*)dst, len);
-  __DSB();  // Data synchronization barrier
+  __DSB();
 
-  // Verify contents
-  if (memcmp((void*)dst, src, len) != 0)
+  // Verify contents against local buffer
+  if (memcmp((void*)dst, local_buf, len) != 0)
   {
     TUF2_LOG1("Flash verify failed\r\n");
     flash_error_blink();
@@ -371,6 +378,9 @@ void board_flash_read(uint32_t addr, void *data, uint32_t len)
 
 bool board_flash_write(uint32_t addr, void const *data, uint32_t len)
 {
+  // Clear any pending flash error flags before programming (per ST IAP example)
+  __HAL_FLASH_CLEAR_FLAG(FLASH_FLAG_EOP | FLASH_FLAG_OPERR |
+                         FLASH_FLAG_WRPERR | FLASH_FLAG_PGSERR);
   HAL_FLASH_Unlock();
   bool result = flash_write_internal(addr, data, len);
   HAL_FLASH_Lock();

@@ -147,6 +147,11 @@ static inline void clock_init(void)
     while (1) {}
   }
 
+  // Set flash programming delay for 240 MHz AXI clock (WRHIGHFREQ = 2)
+  // Required: reset default value (3) is INVALID and causes flash programming failures
+  // Per RM0433 Table 17: DELAY_2 is for AXI 185-225 MHz range
+  __HAL_FLASH_SET_PROGRAM_DELAY(FLASH_PROGRAMMING_DELAY_2);
+
   // Configure USB clock from HSI48
   PeriphClkInitStruct.PeriphClockSelection = RCC_PERIPHCLK_USB;
   PeriphClkInitStruct.UsbClockSelection = RCC_USBCLKSOURCE_HSI48;

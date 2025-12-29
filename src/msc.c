@@ -163,6 +163,9 @@ void tud_msc_write10_complete_cb(uint8_t lun) {
       indicator_set(STATE_WRITING_STARTED);
     }
 
+    // Debug: print block counts to track progress
+    TUF2_LOG2("Blocks: %lu / %lu\r\n", _wr_state.numWritten, _wr_state.numBlocks);
+
     // All block of uf2 file is complete --> complete DFU process
     if (_wr_state.numWritten >= _wr_state.numBlocks) {
       #if DEBUG_SPEED_TEST

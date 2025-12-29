@@ -484,13 +484,17 @@ int uf2_write_block (uint32_t block_no, uint8_t *data, WriteState *state) {
   (void) block_no;
   UF2_Block *bl = (void*) data;
 
-  if ( !is_uf2_block(bl) ) return -1;
+  if ( !is_uf2_block(bl) ) {
+    TUF2_LOG1("!UF2 m0=%08lx m1=%08lx\r\n", bl->magicStart0, bl->magicStart1);
+    return -1;
+  }
 
   if (bl->familyID == BOARD_UF2_FAMILY_ID) {
     // generic family ID
     board_flash_write(bl->targetAddr, bl->data, bl->payloadSize);
   }else {
     // TODO family matches VID/PID
+    TUF2_LOG1("!FAM %08lx\r\n", bl->familyID);
     return -1;
   }
 
