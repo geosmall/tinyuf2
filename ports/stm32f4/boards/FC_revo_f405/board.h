@@ -25,9 +25,8 @@
 #ifndef BOARD_H_
 #define BOARD_H_
 
-// Production mode: bootloader write protection enabled (default)
-// Uncomment below for development/debugging (allows J-Link without mass erase)
-// #define TINYUF2_PROTECT_BOOTLOADER 0
+// Disable WRP for easier development/reflashing
+#define TINYUF2_PROTECT_BOOTLOADER 0
 
 //--------------------------------------------------------------------+
 // LED
