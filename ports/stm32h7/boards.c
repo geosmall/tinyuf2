@@ -2,6 +2,10 @@
 #include "board_api.h"
 #include <stdint.h>
 
+#ifndef BUILD_NO_TINYUSB
+#include "tusb.h"
+#endif
+
 #define STM32_UUID ((uint32_t *)0x1FF1E800)
 
 #ifdef UART_DEV
@@ -315,6 +319,127 @@ int board_uart_write(void const * buf, int len)
   return 0;
 #endif
 }
+
+//--------------------------------------------------------------------+
+// CDC CLI
+//--------------------------------------------------------------------+
+
+#if CFG_TUD_CDC
+
+static char _cli_buf[64];
+static uint8_t _cli_pos = 0;
+
+static void cli_print(const char* str) {
+  size_t len = strlen(str);
+  while (len > 0) {
+    // Wait for buffer space
+    while (tud_cdc_write_available() == 0) {
+      tud_task();
+    }
+    uint32_t written = tud_cdc_write(str, len);
+    str += written;
+    len -= written;
+  }
+  tud_cdc_write_flush();
+}
+
+static void cli_process_command(void) {
+  // Null-terminate and trim
+  _cli_buf[_cli_pos] = '\0';
+
+  // Skip empty commands
+  if (_cli_pos == 0) {
+    cli_print("> ");
+    return;
+  }
+
+  // Process commands
+  if (strcmp(_cli_buf, "help") == 0 || strcmp(_cli_buf, "?") == 0) {
+    cli_print("\r\nCommands:\r\n");
+    cli_print("  help   - Show this help\r\n");
+    cli_print("  info   - Show bootloader info\r\n");
+    cli_print("  erase  - Erase application flash\r\n");
+    cli_print("  reset  - Reset to application\r\n");
+  }
+  else if (strcmp(_cli_buf, "info") == 0) {
+    char buf[80];
+    cli_print("\r\nTinyUF2 Bootloader\r\n");
+    snprintf(buf, sizeof(buf), "Board:  %s\r\n", UF2_BOARD_ID);
+    cli_print(buf);
+    snprintf(buf, sizeof(buf), "Flash:  %luKB (app: %luKB at 0x%08lX)\r\n",
+             (unsigned long)(BOARD_FLASH_SIZE / 1024),
+             (unsigned long)((BOARD_FLASH_SIZE - (BOARD_FLASH_APP_START - 0x08000000)) / 1024),
+             (unsigned long)BOARD_FLASH_APP_START);
+    cli_print(buf);
+    snprintf(buf, sizeof(buf), "USB:    %04X:%04X\r\n", USB_VID, USB_PID);
+    cli_print(buf);
+  }
+  else if (strcmp(_cli_buf, "erase") == 0) {
+    cli_print("\r\nErasing app flash...\r\n");
+    board_flash_erase_app();
+    cli_print("done.\r\n");
+  }
+  else if (strcmp(_cli_buf, "reset") == 0) {
+    cli_print("\r\nResetting...\r\n");
+    tud_cdc_write_flush();
+    // Small delay to let USB flush
+    for (volatile int i = 0; i < 100000; i++) {}
+    NVIC_SystemReset();
+  }
+  else {
+    cli_print("\r\nUnknown command. Type 'help' for list.\r\n");
+  }
+
+  cli_print("> ");
+  _cli_pos = 0;
+}
+
+void cdc_task(void) {
+  if (!tud_cdc_connected() || !tud_cdc_available()) {
+    return;
+  }
+
+  while (tud_cdc_available()) {
+    int32_t ch = tud_cdc_read_char();
+    if (ch < 0) break;
+
+    // Echo character
+    if (ch == '\r' || ch == '\n') {
+      tud_cdc_write_str("\r\n");
+      tud_cdc_write_flush();
+      cli_process_command();
+    }
+    else if (ch == '\b' || ch == 0x7F) {  // Backspace or DEL
+      if (_cli_pos > 0) {
+        _cli_pos--;
+        tud_cdc_write_str("\b \b");  // Erase character on terminal
+        tud_cdc_write_flush();
+      }
+    }
+    else if (_cli_pos < sizeof(_cli_buf) - 1) {
+      _cli_buf[_cli_pos++] = (char)ch;
+      tud_cdc_write_char((char)ch);  // Echo
+      tud_cdc_write_flush();
+    }
+  }
+}
+
+// Invoked when CDC line state changed (e.g., connected/disconnected)
+void tud_cdc_line_state_cb(uint8_t instance, bool dtr, bool rts) {
+  (void) instance;
+  (void) rts;
+  if (dtr) {
+    cli_print("\r\nTinyUF2 Bootloader CLI\r\n");
+    cli_print("Type 'help' for commands\r\n");
+    cli_print("> ");
+  }
+}
+
+#else
+
+void cdc_task(void) {}
+
+#endif // CFG_TUD_CDC
 
 #ifdef TINYUF2_SELF_UPDATE
 void board_self_update(const uint8_t * bootloader_bin, uint32_t bootloader_len)
